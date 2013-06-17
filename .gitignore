@@ -1,0 +1,12 @@
+_darcs
+BRIDGE
+HAZARD
+.*.swp
+.DS_Store
+dist
+*.o
+*.hi
+*.log
+*.aux
+*.ent
+
