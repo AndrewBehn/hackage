@@ -71,7 +71,6 @@ import Data.Array.IArray
 import Data.Array.MArray
 import Data.Array.Unboxed
 import Data.Array.ST
-import Data.Array.Base (unsafeRead, unsafeWrite)
 import Data.STRef
 import Data.Binary
 
@@ -136,8 +135,15 @@ import qualified Prelude as P
 -- See @encode@ and @decode@.
 data family Matrix e
 
+
 data instance Matrix Int
     = IntMatrix !Int !Int (Array Int (UArray Int Int))
+
+data instance Matrix Int32
+    = Int32Matrix !Int !Int (Array Int (UArray Int Int32))
+
+data instance Matrix Int64
+    = Int64Matrix !Int !Int (Array Int (UArray Int Int64))
 
 data instance Matrix Float
     = FloatMatrix !Int !Int (Array Int (UArray Int Float))
@@ -189,8 +195,8 @@ instance (MatrixElement e) => Eq (Matrix e) where
             = allWithIndex (\ix e -> m `at` ix == e) n
         | otherwise = False
 
-instance (MatrixElement e) => NFData (Matrix e) where
-    rnf matrix = matrix `deepseq` ()
+instance (MatrixElement e, NFData e) => NFData (Matrix e) where
+    rnf matrix = map (\x -> x `deepseq` x) matrix `deepseq` ()
 
 instance (MatrixElement e, Binary e) => Binary (Matrix e) where
     
@@ -500,6 +506,30 @@ instance MatrixElement Int where
     det        (IntMatrix m n arr) = if m /= n then 0 else runST (_det thawsUnboxed arr)
     rank       (IntMatrix _ _ arr) = runST (_rank thawsBoxed arr)
 
+instance MatrixElement Int32 where
+    matrix d g = runST (_matrix Int32Matrix arrayST arraySTU d g)
+    fromList = _fromList Int32Matrix
+
+    at         (Int32Matrix _ _ arr) = _at arr
+    dimensions (Int32Matrix m n _) = (m, n)
+    row i      (Int32Matrix _ _ arr) = _row i arr
+    col j      (Int32Matrix _ _ arr) = _col j arr
+    toList     (Int32Matrix _ _ arr) = _toList arr
+    det        (Int32Matrix m n arr) = if m /= n then 0 else runST (_det thawsUnboxed arr)
+    rank       (Int32Matrix _ _ arr) = runST (_rank thawsBoxed arr)
+
+instance MatrixElement Int64 where
+    matrix d g = runST (_matrix Int64Matrix arrayST arraySTU d g)
+    fromList = _fromList Int64Matrix
+
+    at         (Int64Matrix _ _ arr) = _at arr
+    dimensions (Int64Matrix m n _) = (m, n)
+    row i      (Int64Matrix _ _ arr) = _row i arr
+    col j      (Int64Matrix _ _ arr) = _col j arr
+    toList     (Int64Matrix _ _ arr) = _toList arr
+    det        (Int64Matrix m n arr) = if m /= n then 0 else runST (_det thawsUnboxed arr)
+    rank       (Int64Matrix _ _ arr) = runST (_rank thawsBoxed arr)
+
 instance MatrixElement Integer where
     matrix d g = runST (_matrix IntegerMatrix arrayST arrayST d g)
     fromList   = _fromList IntegerMatrix
@@ -645,7 +675,7 @@ tee f x = f x >> return x
 
 read :: (MArray a1 b m, MArray a (a1 Int b) m) =>
                        a Int (a1 Int b) -> Int -> Int -> m b
-read a i j = unsafeRead a i >>= flip unsafeRead j
+read a i j = readArray a i >>= flip readArray j
 
 
 _inv :: (IArray a e, MArray (u s) e (ST s), Fractional e, Ord e, Show e)
@@ -657,9 +687,9 @@ _inv mkArrayST mat = do
         n = 2*m
 
         swap a i j = do
-            tmp <- unsafeRead a i
-            unsafeRead a j >>= unsafeWrite a i
-            unsafeWrite a j tmp
+            tmp <- readArray a i
+            readArray a j >>= writeArray a i
+            writeArray a j tmp
 
     okay <- newSTRef True
 
@@ -675,37 +705,37 @@ _inv mkArrayST mat = do
             swap a iPivot k
 
             forM_ [k+1..m] $ \i -> do
-                a_i <- unsafeRead a i
-                a_k <- unsafeRead a k
+                a_i <- readArray a i
+                a_k <- readArray a k
                 forM_ [k+1..n] $ \j -> do
-                    a_ij <- unsafeRead a_i j
-                    a_kj <- unsafeRead a_k j
-                    a_ik <- unsafeRead a_i k
-                    unsafeWrite a_i j (a_ij - a_kj * (a_ik / p))
-                unsafeWrite a_i k 0
+                    a_ij <- readArray a_i j
+                    a_kj <- readArray a_k j
+                    a_ik <- readArray a_i k
+                    writeArray a_i j (a_ij - a_kj * (a_ik / p))
+                writeArray a_i k 0
 
     invertible <- readSTRef okay
 
     if invertible then
       do
         forM_ [ m - v | v <- [0..m-1] ] $ \i -> do
-            a_i <- unsafeRead a i
-            p   <- unsafeRead a_i i
-            unsafeWrite a_i i 1
+            a_i <- readArray a i
+            p   <- readArray a_i i
+            writeArray a_i i 1
             forM_ [i+1..n] $ \j -> do
-                unsafeRead a_i j >>= unsafeWrite a_i j . (/ p)
+                readArray a_i j >>= writeArray a_i j . (/ p)
 
             unless (i == m) $ do
                 forM_ [i+1..m] $ \k -> do
-                    a_k <- unsafeRead a k
-                    p   <- unsafeRead a_i k
+                    a_k <- readArray a k
+                    p   <- readArray a_i k
 
                     forM_ [k..n] $ \j -> do
-                        a_ij <- unsafeRead a_i j
-                        a_kj <- unsafeRead a_k j
-                        unsafeWrite a_i j (a_ij - p * a_kj)
+                        a_ij <- readArray a_i j
+                        a_kj <- readArray a_k j
+                        writeArray a_i j (a_ij - p * a_kj)
 
-        mapM (\i -> unsafeRead a i >>= getElems
+        mapM (\i -> readArray a i >>= getElems
                         >>= return . listArray (1, m) . drop m) [1..m]
             >>= return . Just . listArray (1, m)
 
@@ -720,9 +750,9 @@ _rank thaws mat = do
         n = snd $ bounds (mat ! 1)
 
         swap a i j = do
-            tmp <- unsafeRead a i
-            unsafeRead a j >>= unsafeWrite a i
-            unsafeWrite a j tmp
+            tmp <- readArray a i
+            readArray a j >>= writeArray a i
+            writeArray a j tmp
 
     a <- thaws mat >>= arrays
 
@@ -739,17 +769,17 @@ _rank thaws mat = do
             let ix = fromJust switchRow + pivotRow
             when (pivotRow /= ix) (swap a pivotRow ix)
 
-            a_p   <- unsafeRead a k
-            pivot <- unsafeRead a_p k
+            a_p   <- readArray a k
+            pivot <- readArray a_p k
             prev  <- readSTRef prevR
             
             forM_ [pivotRow+1..m] $ \i -> do
-                a_i <- unsafeRead a i
+                a_i <- readArray a i
                 forM_ [k+1..n] $ \j -> do
-                    a_ij <- unsafeRead a_i j
-                    a_ik <- unsafeRead a_i k
-                    a_pj <- unsafeRead a_p j
-                    unsafeWrite a_i j ((pivot * a_ij - a_ik * a_pj)
+                    a_ij <- readArray a_i j
+                    a_ik <- readArray a_i k
+                    a_pj <- readArray a_p j
+                    writeArray a_i j ((pivot * a_ij - a_ik * a_pj)
                                         `divide` prev)
 
             writeSTRef ixPivot (pivotRow + 1)
@@ -787,9 +817,9 @@ _det thaws mat = do
                 when (not $ null sf) $ do
                     let sw = head sf
 
-                    row <- unsafeRead a sw
-                    unsafeRead a k >>= unsafeWrite a sw
-                    unsafeWrite a k row
+                    row <- readArray a sw
+                    readArray a k >>= writeArray a sw
+                    writeArray a k row
 
                     read a k k >>= writeSTRef pivotR
                     readSTRef signR >>= writeSTRef signR . negate
@@ -800,21 +830,23 @@ _det thaws mat = do
             unless (sign' == 0) $ do
                 pivot' <- readSTRef pivotR
                 forM_ [(k+1)..size] $ \i -> do
-                    a_i <- unsafeRead a i
+                    a_i <- readArray a i
                     forM [(k+1)..size] $ \j -> do
-                        a_ij <- unsafeRead a_i j
-                        a_ik <- unsafeRead a_i k
+                        a_ij <- readArray a_i j
+                        a_ik <- readArray a_i k
                         a_kj <- read a k j
-                        unsafeWrite a_i j ((pivot' * a_ij - a_ik * a_kj) `divide` prev)
+                        writeArray a_i j ((pivot' * a_ij - a_ik * a_kj) `divide` prev)
 
     liftM2 (*) (readSTRef pivotR) (readSTRef signR)
 
 
 _mult :: MatrixElement e => Matrix e -> Matrix e -> Matrix e
-_mult a b = let rowsA = numRows a
-                rowsB = numRows b
-                colsB = numCols b
-            in  matrix (rowsA, colsB) (\(i,j) -> L.foldl' (+) 0 [a `at` (i, k) * b `at` (k, j) | k <- [1..rowsB]])
+_mult a b =
+    let rowsA = numRows a
+        rowsB = numRows b
+        colsB = numCols b
+        gen i j = L.foldl' (+) 0 [a `at` (i, k) * b `at` (k, j) | k <- [1..rowsB]]
+    in  matrix (rowsA, colsB) (uncurry gen)
 
 
 _matrix :: (IArray a1 (u Int e), IArray u e,
@@ -831,8 +863,8 @@ _matrix c newArray newArrayU (m, n) g = do
     forM_ [1..m] $ \i -> do
         cols <- newArrayU (1, n) 0
         forM_ [1..n] $ \j -> do
-            unsafeWrite cols j (g (i,j))
-        U.unsafeFreeze cols >>= unsafeWrite rows i
+            writeArray cols j (g (i,j))
+        U.unsafeFreeze cols >>= writeArray rows i
     U.unsafeFreeze rows >>= return . c m n
 
 
